@@ -242,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         base_options=BaseOptions(model_asset_path=str(model_path)),
         num_faces=2,
         min_face_detection_confidence=0.5,
-        min_face_presence_score=0.5,
+        min_face_presence_confidence=0.5,
         min_tracking_confidence=0.5,
         output_face_blendshapes=False,
         output_facial_transformation_matrixes=False,
