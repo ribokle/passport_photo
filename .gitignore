@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
 *.pyo
-passport_photos.pdf
+*.pdf
+output_*.png
+output_*.jpg
