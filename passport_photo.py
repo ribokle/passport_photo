@@ -22,8 +22,11 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 # ICAO 35x45 mm photo spec.
 PHOTO_W_MM = 35.0
 PHOTO_H_MM = 45.0
-HEAD_H_MM = 34.0          # target chin-to-crown height within the tile
-EYE_FROM_BOTTOM_MM = 30.0  # eye line measured from bottom of the tile
+
+# Margins inside the tile: space above estimated crown and below chin.
+# The face (crown-to-chin) fills the remaining fraction of the tile height.
+TOP_MARGIN_MM = 5.0     # above estimated crown
+BOTTOM_MARGIN_MM = 7.0  # below chin (room for neck/shoulders)
 
 # A4 portrait.
 A4_W_MM = 210.0
@@ -34,13 +37,12 @@ TILE_GUTTER_MM = 2.0
 # MediaPipe Face Mesh landmark indices (same for Tasks API FaceLandmarker).
 LM_CHIN = 152
 LM_FOREHEAD = 10
-LM_NOSE = 1
 LM_EYE_R = 33   # right eye outer corner
 LM_EYE_L = 263  # left eye outer corner
 
-# Crown sits above forehead landmark; extrapolate by this fraction of (chin-forehead).
-# Face Mesh stops at the hairline; real hair crown is typically 50-60% of face height above it.
-CROWN_EXTRAPOLATION = 0.55
+# Crown sits above forehead landmark (lm 10 = hairline area).
+# Extrapolate upward by this fraction of (chin-to-forehead) distance to estimate hair crown.
+CROWN_EXTRAPOLATION = 0.5
 
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
@@ -67,8 +69,8 @@ class TileLayout:
     dpi: int
     tile_w: int
     tile_h: int
-    head_h: int
-    eye_from_bottom: int
+    top_margin: int    # px above estimated crown
+    bottom_margin: int # px below chin
     page_w: int
     page_h: int
     margin: int
@@ -80,8 +82,8 @@ class TileLayout:
     def for_dpi(cls, dpi: int) -> "TileLayout":
         tile_w = mm_to_px(PHOTO_W_MM, dpi)
         tile_h = mm_to_px(PHOTO_H_MM, dpi)
-        head_h = mm_to_px(HEAD_H_MM, dpi)
-        eye_from_bottom = mm_to_px(EYE_FROM_BOTTOM_MM, dpi)
+        top_margin = mm_to_px(TOP_MARGIN_MM, dpi)
+        bottom_margin = mm_to_px(BOTTOM_MARGIN_MM, dpi)
         page_w = mm_to_px(A4_W_MM, dpi)
         page_h = mm_to_px(A4_H_MM, dpi)
         margin = mm_to_px(PAGE_MARGIN_MM, dpi)
@@ -90,7 +92,7 @@ class TileLayout:
         usable_h = page_h - 2 * margin
         cols = max(1, (usable_w + gutter) // (tile_w + gutter))
         rows = max(1, (usable_h + gutter) // (tile_h + gutter))
-        return cls(dpi, tile_w, tile_h, head_h, eye_from_bottom,
+        return cls(dpi, tile_w, tile_h, top_margin, bottom_margin,
                    page_w, page_h, margin, gutter, int(cols), int(rows))
 
     @property
@@ -122,35 +124,42 @@ def detect_landmarks(pil_img: Image.Image, landmarker) -> np.ndarray | None:
 def compute_crop_box(landmarks: np.ndarray, src_w: int, src_h: int,
                      layout: TileLayout) -> tuple[float, float, float, float] | None:
     """Compute (left, top, right, bottom) in source-image pixels.
-    Returns None only if the face geometry is invalid or the bottom is clipped.
-    Top/left/right edge overflows are handled with white padding in make_tile.
-    """
-    chin_y = landmarks[LM_CHIN, 1]
-    forehead_y = landmarks[LM_FOREHEAD, 1]
-    # Use eye midpoint for horizontal center — more stable than nose tip for
-    # slightly turned heads, giving equal left/right margins to the face.
-    center_x = (landmarks[LM_EYE_R, 0] + landmarks[LM_EYE_L, 0]) / 2.0
-    eye_y = (landmarks[LM_EYE_R, 1] + landmarks[LM_EYE_L, 1]) / 2.0
 
+    Anchors the crop on the estimated crown (top) and chin (bottom) so the full
+    head is always visible.  Horizontal centre comes from the face bounding box
+    so left and right margins are equal relative to the face edges.
+    Overflows beyond the image edge are handled with white padding in make_tile.
+    """
+    chin_y = float(landmarks[LM_CHIN, 1])
+    forehead_y = float(landmarks[LM_FOREHEAD, 1])
     face_h = chin_y - forehead_y
     if face_h <= 0:
         return None
-    crown_y = forehead_y - CROWN_EXTRAPOLATION * face_h
-    head_h_src = chin_y - crown_y
 
-    # Scale: head height in source -> head height in tile.
-    scale = head_h_src / layout.head_h  # source px per tile px
+    # Estimate crown: hair sits above the forehead (hairline) landmark.
+    crown_y = forehead_y - CROWN_EXTRAPOLATION * face_h  # may go above image top
+
+    # Scale: map crown-to-chin (head height) to the tile height minus margins.
+    head_h_src = chin_y - crown_y
+    head_h_tile = layout.tile_h - layout.top_margin - layout.bottom_margin
+    if head_h_tile <= 0:
+        return None
+    scale = head_h_src / head_h_tile  # source px per tile px
+
     crop_w = layout.tile_w * scale
     crop_h = layout.tile_h * scale
 
-    # Position: eye line at (tile_h - eye_from_bottom) from top of tile.
-    eye_y_in_tile_px = layout.tile_h - layout.eye_from_bottom
-    top = eye_y - eye_y_in_tile_px * scale
-    left = center_x - crop_w / 2.0
-    right = left + crop_w
+    # Vertical: crown lands at top_margin from tile top.
+    top = crown_y - layout.top_margin * scale
     bottom = top + crop_h
 
-    if bottom > src_h:
+    # Horizontal: face bounding-box centre gives equal margins either side.
+    center_x = float((landmarks[:, 0].min() + landmarks[:, 0].max()) / 2.0)
+    left = center_x - crop_w / 2.0
+    right = left + crop_w
+
+    # Only reject if the bottom (chin + margin) would go below the image.
+    if bottom > src_h + src_h * 0.05:   # 5% tolerance for slight chin overshoot
         return None
     return (left, top, right, bottom)
 
@@ -160,21 +169,22 @@ def make_tile(src_rgb: Image.Image, box: tuple[float, float, float, float],
     left, top, right, bottom = box
     src_w, src_h = src_rgb.size
 
-    # If the crop box extends outside the image edges, pad with white.
-    pad_left = max(0, -left)
-    pad_top = max(0, -top)
-    pad_right = max(0, right - src_w)
+    # Pad with white wherever the crop box extends outside the image.
+    pad_left  = max(0.0, -left)
+    pad_top   = max(0.0, -top)
+    pad_right = max(0.0, right - src_w)
+    pad_bot   = max(0.0, bottom - src_h)
 
-    if pad_left > 0 or pad_top > 0 or pad_right > 0:
+    if pad_left > 0 or pad_top > 0 or pad_right > 0 or pad_bot > 0:
         new_w = int(src_w + pad_left + pad_right)
-        new_h = int(src_h + pad_top)
+        new_h = int(src_h + pad_top + pad_bot)
         padded = Image.new("RGB", (new_w, new_h), "white")
         padded.paste(src_rgb, (int(pad_left), int(pad_top)))
         shifted = (left + pad_left, top + pad_top,
                    right + pad_left, bottom + pad_top)
         crop = padded.crop(shifted)
     else:
-        crop = src_rgb.crop(box)
+        crop = src_rgb.crop((left, top, right, bottom))
 
     return crop.resize((layout.tile_w, layout.tile_h), Image.LANCZOS)
 
