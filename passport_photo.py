@@ -25,7 +25,7 @@ PHOTO_H_MM = 45.0
 
 # Margins inside the tile: space above estimated crown and below chin.
 # The face (crown-to-chin) fills the remaining fraction of the tile height.
-TOP_MARGIN_MM = 3.0     # above estimated crown
+TOP_MARGIN_MM = 1.0     # above estimated crown
 BOTTOM_MARGIN_MM = 7.0  # below chin (room for neck/shoulders)
 
 # A4 portrait.
