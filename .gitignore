@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.pyo
+input_photos/
+passport_photos.pdf
