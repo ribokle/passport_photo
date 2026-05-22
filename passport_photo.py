@@ -25,7 +25,7 @@ PHOTO_H_MM = 45.0
 
 # Margins inside the tile: space above estimated crown and below chin.
 # The face (crown-to-chin) fills the remaining fraction of the tile height.
-TOP_MARGIN_MM = 5.0     # above estimated crown
+TOP_MARGIN_MM = 3.0     # above estimated crown
 BOTTOM_MARGIN_MM = 7.0  # below chin (room for neck/shoulders)
 
 # A4 portrait.
@@ -199,8 +199,8 @@ def render_page(tiles: list[Image.Image], layout: TileLayout) -> Image.Image:
     rows = (n + layout.cols - 1) // layout.cols
     grid_w = cols * layout.tile_w + (cols - 1) * layout.gutter
     grid_h = rows * layout.tile_h + (rows - 1) * layout.gutter
-    x0 = (layout.page_w - grid_w) // 2
-    y0 = (layout.page_h - grid_h) // 2
+    x0 = (layout.page_w - grid_w) // 2  # still centred horizontally
+    y0 = layout.margin                   # anchored to top margin
 
     draw = ImageDraw.Draw(page)
     for i, tile in enumerate(tiles):
