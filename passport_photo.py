@@ -23,10 +23,13 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 PHOTO_W_MM = 35.0
 PHOTO_H_MM = 45.0
 
-# Margins inside the tile: space above estimated crown and below chin.
-# The face (crown-to-chin) fills the remaining fraction of the tile height.
-TOP_MARGIN_MM = 1.0     # above estimated crown
-BOTTOM_MARGIN_MM = 7.0  # below chin (room for neck/shoulders)
+# Crop mode presets — margins inside the tile (mm above crown / mm below chin).
+# "passport": tight head crop.
+# "id": head + shoulders (head fills ~56% of tile, ~19mm below chin).
+MODES: dict[str, dict[str, float]] = {
+    "passport": {"top_mm": 1.0, "bottom_mm": 7.0},
+    "id":       {"top_mm": 1.0, "bottom_mm": 19.0},
+}
 
 # A4 portrait.
 A4_W_MM = 210.0
@@ -79,11 +82,11 @@ class TileLayout:
     rows: int
 
     @classmethod
-    def for_dpi(cls, dpi: int) -> "TileLayout":
+    def for_dpi(cls, dpi: int, top_mm: float = 1.0, bottom_mm: float = 7.0) -> "TileLayout":
         tile_w = mm_to_px(PHOTO_W_MM, dpi)
         tile_h = mm_to_px(PHOTO_H_MM, dpi)
-        top_margin = mm_to_px(TOP_MARGIN_MM, dpi)
-        bottom_margin = mm_to_px(BOTTOM_MARGIN_MM, dpi)
+        top_margin = mm_to_px(top_mm, dpi)
+        bottom_margin = mm_to_px(bottom_mm, dpi)
         page_w = mm_to_px(A4_W_MM, dpi)
         page_h = mm_to_px(A4_H_MM, dpi)
         margin = mm_to_px(PAGE_MARGIN_MM, dpi)
@@ -252,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-o", "--output", type=Path, default=Path("passport_photos.pdf"))
     ap.add_argument("--copies", type=int, default=4,
                     help="Copies per face on the A4 sheet (default: 4)")
+    ap.add_argument("--mode", choices=list(MODES), default="passport",
+                    help="Crop preset: 'passport' (head only) or 'id' (head + shoulders)")
     ap.add_argument("--dpi", type=int, default=300)
     ap.add_argument("--debug", action="store_true",
                     help="Also save individual tile PNGs next to the PDF")
@@ -260,8 +265,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.copies < 1:
         ap.error("--copies must be >= 1")
 
-    layout = TileLayout.for_dpi(args.dpi)
-    print(f"Layout: {layout.cols}x{layout.rows} = {layout.per_page} tiles/page "
+    margins = MODES[args.mode]
+    layout = TileLayout.for_dpi(args.dpi, top_mm=margins["top_mm"], bottom_mm=margins["bottom_mm"])
+    print(f"Mode: {args.mode}  |  Layout: {layout.cols}x{layout.rows} = {layout.per_page} tiles/page "
           f"at {args.dpi} DPI")
 
     inputs = iter_inputs(args.inputs)
