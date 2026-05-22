@@ -39,7 +39,8 @@ LM_EYE_R = 33   # right eye outer corner
 LM_EYE_L = 263  # left eye outer corner
 
 # Crown sits above forehead landmark; extrapolate by this fraction of (chin-forehead).
-CROWN_EXTRAPOLATION = 0.25
+# Face Mesh stops at the hairline; real hair crown is typically 50-60% of face height above it.
+CROWN_EXTRAPOLATION = 0.55
 
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
@@ -121,11 +122,14 @@ def detect_landmarks(pil_img: Image.Image, landmarker) -> np.ndarray | None:
 def compute_crop_box(landmarks: np.ndarray, src_w: int, src_h: int,
                      layout: TileLayout) -> tuple[float, float, float, float] | None:
     """Compute (left, top, right, bottom) in source-image pixels.
-    Returns None if the face is too close to an edge to satisfy the spec.
+    Returns None only if the face geometry is invalid or the bottom is clipped.
+    Top/left/right edge overflows are handled with white padding in make_tile.
     """
     chin_y = landmarks[LM_CHIN, 1]
     forehead_y = landmarks[LM_FOREHEAD, 1]
-    nose_x = landmarks[LM_NOSE, 0]
+    # Use eye midpoint for horizontal center — more stable than nose tip for
+    # slightly turned heads, giving equal left/right margins to the face.
+    center_x = (landmarks[LM_EYE_R, 0] + landmarks[LM_EYE_L, 0]) / 2.0
     eye_y = (landmarks[LM_EYE_R, 1] + landmarks[LM_EYE_L, 1]) / 2.0
 
     face_h = chin_y - forehead_y
@@ -142,18 +146,36 @@ def compute_crop_box(landmarks: np.ndarray, src_w: int, src_h: int,
     # Position: eye line at (tile_h - eye_from_bottom) from top of tile.
     eye_y_in_tile_px = layout.tile_h - layout.eye_from_bottom
     top = eye_y - eye_y_in_tile_px * scale
-    left = nose_x - crop_w / 2.0
+    left = center_x - crop_w / 2.0
     right = left + crop_w
     bottom = top + crop_h
 
-    if left < 0 or top < 0 or right > src_w or bottom > src_h:
+    if bottom > src_h:
         return None
     return (left, top, right, bottom)
 
 
 def make_tile(src_rgb: Image.Image, box: tuple[float, float, float, float],
               layout: TileLayout) -> Image.Image:
-    crop = src_rgb.crop(box)
+    left, top, right, bottom = box
+    src_w, src_h = src_rgb.size
+
+    # If the crop box extends outside the image edges, pad with white.
+    pad_left = max(0, -left)
+    pad_top = max(0, -top)
+    pad_right = max(0, right - src_w)
+
+    if pad_left > 0 or pad_top > 0 or pad_right > 0:
+        new_w = int(src_w + pad_left + pad_right)
+        new_h = int(src_h + pad_top)
+        padded = Image.new("RGB", (new_w, new_h), "white")
+        padded.paste(src_rgb, (int(pad_left), int(pad_top)))
+        shifted = (left + pad_left, top + pad_top,
+                   right + pad_left, bottom + pad_top)
+        crop = padded.crop(shifted)
+    else:
+        crop = src_rgb.crop(box)
+
     return crop.resize((layout.tile_w, layout.tile_h), Image.LANCZOS)
 
 
