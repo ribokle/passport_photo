@@ -45,7 +45,12 @@ LM_EYE_L = 263  # left eye outer corner
 
 # Crown sits above forehead landmark (lm 10 = hairline area).
 # Extrapolate upward by this fraction of (chin-to-forehead) distance to estimate hair crown.
-CROWN_EXTRAPOLATION = 0.5
+# Increase if the top of the head is still being cut; decrease for shaved/very short hair.
+CROWN_EXTRAPOLATION = 0.65
+
+# If the computed crop top lands within this many source pixels of the image top,
+# snap to the image edge so no hair is ever missed by a sliver.
+SNAP_TO_EDGE_PX = 30
 
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
@@ -125,7 +130,9 @@ def detect_landmarks(pil_img: Image.Image, landmarker) -> np.ndarray | None:
 
 
 def compute_crop_box(landmarks: np.ndarray, src_w: int, src_h: int,
-                     layout: TileLayout) -> tuple[float, float, float, float] | None:
+                     layout: TileLayout,
+                     crown_extrapolation: float = CROWN_EXTRAPOLATION,
+                     ) -> tuple[float, float, float, float] | None:
     """Compute (left, top, right, bottom) in source-image pixels.
 
     Anchors the crop on the estimated crown (top) and chin (bottom) so the full
@@ -140,7 +147,7 @@ def compute_crop_box(landmarks: np.ndarray, src_w: int, src_h: int,
         return None
 
     # Estimate crown: hair sits above the forehead (hairline) landmark.
-    crown_y = forehead_y - CROWN_EXTRAPOLATION * face_h  # may go above image top
+    crown_y = forehead_y - crown_extrapolation * face_h  # may go above image top
 
     # Scale: map crown-to-chin (head height) to the tile height minus margins.
     head_h_src = chin_y - crown_y
@@ -154,6 +161,12 @@ def compute_crop_box(landmarks: np.ndarray, src_w: int, src_h: int,
 
     # Vertical: crown lands at top_margin from tile top.
     top = crown_y - layout.top_margin * scale
+
+    # Snap to image edge if the crop top is only a sliver away — avoids
+    # cutting a few pixels of hair when the face is close to the frame top.
+    if 0 < top < SNAP_TO_EDGE_PX:
+        top = 0.0
+
     bottom = top + crop_h
 
     # Horizontal: face bounding-box centre gives equal margins either side.
@@ -230,7 +243,8 @@ def iter_inputs(paths: list[Path]) -> list[Path]:
     return out
 
 
-def process_one(path: Path, layout: TileLayout, landmarker) -> Image.Image | None:
+def process_one(path: Path, layout: TileLayout, landmarker,
+                crown_extrapolation: float = CROWN_EXTRAPOLATION) -> Image.Image | None:
     try:
         pil = load_image_rgb(path)
     except Exception as exc:
@@ -240,7 +254,8 @@ def process_one(path: Path, layout: TileLayout, landmarker) -> Image.Image | Non
     if lms is None:
         print(f"SKIP {path.name}: need exactly one face", file=sys.stderr)
         return None
-    box = compute_crop_box(lms, pil.width, pil.height, layout)
+    box = compute_crop_box(lms, pil.width, pil.height, layout,
+                           crown_extrapolation=crown_extrapolation)
     if box is None:
         print(f"SKIP {path.name}: face too close to edge for 35x45mm crop",
               file=sys.stderr)
@@ -257,6 +272,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="Copies per face on the A4 sheet (default: 4)")
     ap.add_argument("--mode", choices=list(MODES), default="passport",
                     help="Crop preset: 'passport' (head only) or 'id' (head + shoulders)")
+    ap.add_argument("--crown", type=float, default=CROWN_EXTRAPOLATION, metavar="FLOAT",
+                    help=f"Crown extrapolation factor (default {CROWN_EXTRAPOLATION}). "
+                         "Fraction of face height added above the forehead landmark to "
+                         "estimate the hair crown. Increase (e.g. 0.8) if the top of "
+                         "the head is still cut; decrease (e.g. 0.4) for shaved/very "
+                         "short hair.")
     ap.add_argument("--dpi", type=int, default=300)
     ap.add_argument("--debug", action="store_true",
                     help="Also save individual tile PNGs next to the PDF")
@@ -264,6 +285,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.copies < 1:
         ap.error("--copies must be >= 1")
+    if not 0.0 <= args.crown <= 2.0:
+        ap.error("--crown must be between 0.0 and 2.0")
 
     margins = MODES[args.mode]
     layout = TileLayout.for_dpi(args.dpi, top_mm=margins["top_mm"], bottom_mm=margins["bottom_mm"])
@@ -290,7 +313,8 @@ def main(argv: list[str] | None = None) -> int:
     failures = 0
     with vision.FaceLandmarker.create_from_options(options) as landmarker:
         for path in inputs:
-            tile = process_one(path, layout, landmarker)
+            tile = process_one(path, layout, landmarker,
+                               crown_extrapolation=args.crown)
             if tile is None:
                 failures += 1
                 continue

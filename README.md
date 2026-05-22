@@ -65,6 +65,16 @@ python passport_photo.py input_photos/ -o sheet.pdf --dpi 600
 python passport_photo.py input_photos/ -o sheet.pdf --debug
 ```
 
+**Head still being cut off? Increase the crown extrapolation:**
+```bash
+python passport_photo.py input_photos/ -o sheet.pdf --crown 0.8
+```
+
+**Very short / shaved hair? Reduce it:**
+```bash
+python passport_photo.py input_photos/ -o sheet.pdf --crown 0.4
+```
+
 ## All options
 
 | Option | Default | Description |
@@ -73,6 +83,7 @@ python passport_photo.py input_photos/ -o sheet.pdf --debug
 | `-o / --output` | `passport_photos.pdf` | Output PDF path |
 | `--mode` | `passport` | `passport` — tight head crop; `id` — head + shoulders |
 | `--copies` | `4` | How many times to repeat each face on the sheet |
+| `--crown` | `0.65` | Crown extrapolation factor — fraction of face height added above the forehead landmark to estimate the hair crown. Raise if head is cut; lower for very short/shaved hair |
 | `--dpi` | `300` | Print resolution (300 is standard; 600 for premium prints) |
 | `--debug` | off | Save individual cropped tile PNGs alongside the PDF |
 
